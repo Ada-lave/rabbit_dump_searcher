@@ -1,0 +1,11 @@
+[package]
+name = "grep_exp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.22.1"
+grep = "0.3.2"
+grep-regex = "0.1.13"
+grep-searcher = "0.1.14"
+serde_json = "1.0.142"
