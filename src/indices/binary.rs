@@ -23,4 +23,8 @@ impl <'a> BinaryIndex <'a> {
     pub fn new() -> Self {
         Self {total_size:0, binary_refs: HashMap::new() }
     }
+
+    pub fn get_ref_by_name(&self, ref_name: &str) -> Option<&BinaryRef<'_>> {
+        return self.binary_refs.get(ref_name);
+    }
 }

@@ -1,7 +1,5 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Error;
-use std::os::unix::fs::FileExt;
 use std::{fs, io};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -11,6 +9,7 @@ use grep_searcher::{Searcher};
 use memmap2::Mmap;
 
 use crate::indices::binary::{BinaryData, BinaryIndex, BinaryRef};
+use crate::indices::content::IndexContentSink;
 use crate::indices::proc_heap::ProcHeapIndex;
 
 
@@ -18,7 +17,7 @@ pub struct GlobalIndex<'a> {
     pub index_sink: IndexSink,
     pub proc_heap_index: ProcHeapIndex,
     pub binary_index: BinaryIndex<'a>,
-    pub mmap: Mmap
+    pub mmap: &'a Mmap
 }
 
 pub struct IndexSink {
@@ -40,7 +39,7 @@ impl Sink for IndexSink {
     type Error = io::Error;
     fn matched(&mut self, _searcher: &Searcher, match_: &SinkMatch) -> Result<bool, Self::Error> {
         let byte_offset = match_.absolute_byte_offset();
-        let match_bytes = match_.bytes();
+        let match_bytes = match_.bytes().trim_ascii();
         let tag_end = match_bytes
                 .iter()
                 .position(|&x| x == b':')
@@ -51,8 +50,8 @@ impl Sink for IndexSink {
         } else {
             None
         };
-
         if match_bytes.starts_with(b"=proc_heap") {
+            println!("{}", String::from_utf8(match_.bytes().to_vec()).unwrap());
             self.proc_heap_matches.push((tag_id_string, byte_offset));
         } else if match_bytes.starts_with(b"=binary") {
             self.binary_matches.push((tag_id_string, byte_offset));
@@ -63,10 +62,7 @@ impl Sink for IndexSink {
 }
 
 impl <'a> GlobalIndex <'a> {
-    pub fn new(file: &'a File) -> Self {
-        let mmap = unsafe {
-            Mmap::map(file).unwrap()
-        };
+    pub fn new(mmap: &'a Mmap) -> Self {
         Self {
             proc_heap_index: ProcHeapIndex::new(),
             binary_index: BinaryIndex::new(),
@@ -75,16 +71,16 @@ impl <'a> GlobalIndex <'a> {
         }
     }
 
-    pub fn build(&mut self, file: &File) {
-        let matcher = RegexMatcher::new(r"=:\w+").unwrap();
+    pub fn build(&mut self) {
+        let matcher = RegexMatcher::new(r"^=.*").unwrap();
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .line_number(false)
             .build();
-        searcher.search_file(matcher, file, &mut self.index_sink).unwrap();
+        searcher.search_slice(matcher, &self.mmap, &mut self.index_sink).unwrap();
     }
 
-    pub fn index_binary(&'a mut self) -> Result<bool, Error> {
+    pub fn index_binary(&mut self) -> Result<bool, Error> {
         let file_data = self.mmap.as_ref();
         for window in self.index_sink.binary_matches.windows(2) {
             let (_, offset1) = &window[0];
@@ -109,5 +105,21 @@ impl <'a> GlobalIndex <'a> {
             }
         }  
         Ok(true)
+    }
+
+    pub fn dump_messages(&mut self) {
+        let file_data = self.mmap.as_ref();
+        self.proc_heap_index.index_proc_heap(&self.index_sink.proc_heap_matches, file_data, &self.binary_index.binary_refs).unwrap();
+    }
+
+    pub fn show_first_n(&mut self, n: i32) {
+        let mut limit = 0;
+        for (k, v) in &self.binary_index.binary_refs {
+            if limit >= n {
+                break;
+            }
+            println!("{} - {}", k, v.ref_name);
+            limit += 1;
+        }
     }
 }
