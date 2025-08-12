@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use grep_regex::{Error, RegexMatcher};
 use grep_searcher::{BinaryDetection, SearcherBuilder};
@@ -7,15 +8,21 @@ use memmap2::Mmap;
 use crate::indices::binary::BinaryRef;
 use crate::indices::global::IndexSink;
 
+
+#[derive(Debug)]
+enum NodeValue {
+    Link { left: String, right: Option<String> },
+    Data { address: String, offset: usize, size: usize },
+}
 pub struct ContentIndex<'a> {
     pub index_sink: IndexSink,
-    pub mmap: &'a Mmap
+    pub mmap: &'a [u8]
 
 }
 
 
 impl <'a>ContentIndex<'a> {
-    pub fn new(mmap: &'a Mmap) -> Self {
+    pub fn new(mmap: &'a [u8]) -> Self {
         Self {
             mmap: mmap,
             index_sink: IndexSink::new(),
@@ -35,53 +42,135 @@ impl <'a>ContentIndex<'a> {
         Ok(())
     }
 
-    pub fn get_messages(&self, binary_refs: &HashMap<String, BinaryRef>) -> Result<Vec<String>, Error> {
+    pub fn get_messages(&self, binary_refs: &'a HashMap<String, BinaryRef>) -> Result<Vec<String>, Error> {
         let mut messages: Vec<String> = Vec::new();
-        let file_data = self.mmap.as_ref();
         for window in self.index_sink.matches.windows(2) {
+            if messages.len() > 5 {
+                break
+            }
             let (_, offset1) = &window[0];
             let (_, offset2) = &window[1];
-            let mut message_parts: Vec<String> = Vec::new();
-            let data_slice = &file_data[*offset1 as usize..*offset2 as usize];
-            let mut proc_heap_data = std::str::from_utf8(data_slice).unwrap();
-
-            println!("{proc_heap_data}");
-            // let mut content_data_ref = proc_heap_data.next();
-            
-            // loop {
-            //     match content_data_ref {
-            //         Some(data) => {
-            //             if !data.contains(':') && data.contains("content") {
-            //                 content_data_ref = proc_heap_data.next();
-            //                 continue;
-            //             }
-            //             println!("{}", data);
-            //             let (_, list) = data.split_once(':').unwrap();
-            //             let (young_heap_reff, next_data_reff) = list.split_once(':').unwrap();
-            //             message_parts.push(self.find_message_part(binary_refs, young_heap_reff.to_string()));
-            //             if next_data_reff != "N" {
-            //                 content_data_ref = proc_heap_data.next();
-            //             }
-            //         }
-            //         None => break
-            //     }
-            // }
-            // messages.push(message_parts.join(""));
+            let mut message_parts: Vec<&'a str> = Vec::new();
+            let data_slice = &self.mmap[*offset1 as usize..*offset2 as usize];
+            let proc_heap_data = std::str::from_utf8(data_slice).unwrap();
+            let content_nodes = self.build_content_map(proc_heap_data);
+            for node in &content_nodes {
+                match node {
+                    NodeValue::Data { address, offset, size } => {
+                        let part = self.find_message_part(binary_refs, address.to_string());
+                        match part {
+                            Some(part) => {
+                                message_parts.push(part);
+                            }
+                            None => {}
+                        }
+                    }
+                    NodeValue::Link { left, right } => {}
+                }
+            }
+            messages.push(message_parts.join(""));
         }
         if let Some(last_match) = self.index_sink.matches.last() {
             let (_, offset1) = last_match;
-            let mut message_parts: Vec<String> = Vec::new();
-            let data_slice = &file_data[*offset1 as usize..*&file_data.len() as usize];
-            let mut proc_heap_data = std::str::from_utf8(data_slice).unwrap();
-
-            println!("{proc_heap_data}");
+            let mut message_parts: Vec<&'a str> = Vec::new();
+            let data_slice = &self.mmap[*offset1 as usize..*&self.mmap.len() as usize];
+            let proc_heap_data = std::str::from_utf8(data_slice).unwrap();
+            let content_nodes = self.build_content_map(proc_heap_data);
+            for node in &content_nodes {
+                match node {
+                    NodeValue::Data { address, offset, size } => {
+                        let part = self.find_message_part(binary_refs, address.to_string());
+                        match part {
+                            Some(part) => {
+                                message_parts.push(part);
+                            }
+                            None => {}
+                        }
+                    }
+                    NodeValue::Link { left, right } => {}
+                }
+            }
+            messages.push(message_parts.join(""));
         }
         Ok(messages)
     }
 
-    fn find_message_part(&self, binary_refs: &HashMap<String, BinaryRef>, key: String) -> String {
+    fn find_message_part(&self, binary_refs: &'a HashMap<String, BinaryRef>, key: String) -> Option<&'a str> {
         let bin_ref = binary_refs.get(&key);
-        return bin_ref.unwrap().binary_data.data.to_string();
+        match bin_ref {
+            Some(bin_ref) => {
+                return Some(bin_ref.binary_data.data);
+            }
+            None => {return None}
+        }
+    }
+
+    fn build_content_map(&self, input: &str) -> Vec<NodeValue> {
+        let mut data_nodes: Vec<NodeValue> = Vec::new();
+        println!("Start build content map: {} len", input.len());
+        for line in input.trim().lines() {
+            if let Some((key, value)) = line.split_once(':') {
+                if value.starts_with("Yc") {
+                    let parts: Vec<&str> = value.split(':').collect();
+                    if parts.len() >= 3 {
+                        data_nodes.push(
+                            NodeValue::Data {
+                                address: parts[0].trim_start_matches("Yc").to_string(),
+                                offset: usize::from_str_radix(parts[1], 16).unwrap_or(0),
+                                size: usize::from_str_radix(parts[2], 16).unwrap_or(0),
+                            },
+                        );
+                    }
+                }
+            }
+            
+        }
+        return data_nodes;
+    }
+    fn collect_data_in_order(
+        &self,
+        nodes: &HashMap<String, NodeValue>,
+        start: String,
+    ) -> Vec<(String, usize, usize)> {
+        let mut result = Vec::new();
+        let mut current = Some(start.to_string());
+
+        while let Some(key) = current {
+            match nodes.get(&key) {
+                Some(NodeValue::Link { left, right }) => {
+                    // Идём по "left", чтобы дойти до Data
+                    if let Some((addr, off, size)) = self.find_data(nodes, left) {
+                        result.push((addr, off, size));
+                    }
+                    // Переходим к следующему элементу
+                    current = right.clone();
+                }
+                _ => break,
+            }
+        }
+
+        result
+    }
+
+    fn find_data(
+        &self,
+        nodes: &HashMap<String, NodeValue>,
+        start: &str,
+    ) -> Option<(String, usize, usize)> {
+        let mut current = Some(start.to_string());
+
+        while let Some(key) = current {
+            match nodes.get(&key) {
+                Some(NodeValue::Data { address, offset, size }) => {
+                    return Some((address.clone(), *offset, *size));
+                }
+                Some(NodeValue::Link { left, .. }) => {
+                    current = Some(left.clone());
+                }
+                _ => break,
+            }
+        }
+        None
     }
 }
 

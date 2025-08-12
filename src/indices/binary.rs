@@ -25,12 +25,12 @@ pub struct BinaryIndex<'a> {
     pub total_size: usize,
     pub index_sink: IndexSink,
     pub binary_refs: HashMap<String, BinaryRef<'a>>,
-    pub mmap: &'a Mmap
+    pub mmap: &'a [u8]
 
 }
 
 impl <'a> BinaryIndex <'a> {
-    pub fn new(mmap: &'a Mmap) -> Self {
+    pub fn new(mmap: &'a [u8]) -> Self {
         Self {mmap: mmap, total_size:0, index_sink: IndexSink::new(), binary_refs: HashMap::new() }
     }
 
@@ -44,11 +44,10 @@ impl <'a> BinaryIndex <'a> {
     }
 
     pub fn index(&mut self) -> Result<bool, Error> {
-        let file_data = self.mmap.as_ref();
         for window in self.index_sink.matches.windows(2) {
             let (_, offset1) = &window[0];
             let (_, offset2) = &window[1];
-            let data_slice = &file_data[*offset1 as usize..*offset2 as usize];
+            let data_slice = &self.mmap[*offset1 as usize..*offset2 as usize];
             let mut lines = std::str::from_utf8(data_slice).unwrap().lines();
             
             if let Some((_, part2)) = lines.next().unwrap().split_once(':') {
