@@ -1,6 +1,5 @@
 use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, SearcherBuilder};
-use memmap2::Mmap;
 
 use std::collections::HashMap;
 use std::io::Error;

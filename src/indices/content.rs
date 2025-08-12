@@ -1,9 +1,6 @@
 use std::collections::HashMap;
-use std::str::FromStr;
-
 use grep_regex::{Error, RegexMatcher};
 use grep_searcher::{BinaryDetection, SearcherBuilder};
-use memmap2::Mmap;
 
 use crate::indices::binary::BinaryRef;
 use crate::indices::global::IndexSink;
@@ -30,7 +27,7 @@ impl <'a>ContentIndex<'a> {
     }
 
     pub fn build(&mut self) -> Result<(), Error> {
-        let matcher = RegexMatcher::new(r"^[A-Za-z0-9]{12}:t6:A7:content*")?;
+        let matcher = RegexMatcher::new(r"t6:A7:content*")?;
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .line_number(false)
@@ -45,9 +42,6 @@ impl <'a>ContentIndex<'a> {
     pub fn get_messages(&self, binary_refs: &'a HashMap<String, BinaryRef>) -> Result<Vec<String>, Error> {
         let mut messages: Vec<String> = Vec::new();
         for window in self.index_sink.matches.windows(2) {
-            if messages.len() > 5 {
-                break
-            }
             let (_, offset1) = &window[0];
             let (_, offset2) = &window[1];
             let mut message_parts: Vec<&'a str> = Vec::new();
@@ -68,7 +62,10 @@ impl <'a>ContentIndex<'a> {
                     NodeValue::Link { left, right } => {}
                 }
             }
-            messages.push(message_parts.join(""));
+            let data = message_parts.join("");
+            if data.len() > 2 {
+                messages.push(data);
+            }
         }
         if let Some(last_match) = self.index_sink.matches.last() {
             let (_, offset1) = last_match;
@@ -107,7 +104,6 @@ impl <'a>ContentIndex<'a> {
 
     fn build_content_map(&self, input: &str) -> Vec<NodeValue> {
         let mut data_nodes: Vec<NodeValue> = Vec::new();
-        println!("Start build content map: {} len", input.len());
         for line in input.trim().lines() {
             if let Some((key, value)) = line.split_once(':') {
                 if value.starts_with("Yc") {
@@ -127,56 +123,13 @@ impl <'a>ContentIndex<'a> {
         }
         return data_nodes;
     }
-    fn collect_data_in_order(
-        &self,
-        nodes: &HashMap<String, NodeValue>,
-        start: String,
-    ) -> Vec<(String, usize, usize)> {
-        let mut result = Vec::new();
-        let mut current = Some(start.to_string());
-
-        while let Some(key) = current {
-            match nodes.get(&key) {
-                Some(NodeValue::Link { left, right }) => {
-                    // Идём по "left", чтобы дойти до Data
-                    if let Some((addr, off, size)) = self.find_data(nodes, left) {
-                        result.push((addr, off, size));
-                    }
-                    // Переходим к следующему элементу
-                    current = right.clone();
-                }
-                _ => break,
-            }
-        }
-
-        result
-    }
-
-    fn find_data(
-        &self,
-        nodes: &HashMap<String, NodeValue>,
-        start: &str,
-    ) -> Option<(String, usize, usize)> {
-        let mut current = Some(start.to_string());
-
-        while let Some(key) = current {
-            match nodes.get(&key) {
-                Some(NodeValue::Data { address, offset, size }) => {
-                    return Some((address.clone(), *offset, *size));
-                }
-                Some(NodeValue::Link { left, .. }) => {
-                    current = Some(left.clone());
-                }
-                _ => break,
-            }
-        }
-        None
-    }
 }
 
 #[test]
 fn build_index() {
-    use std::{fs::File};
+    use std::{fs::File}; 
+    use memmap2::Mmap;
+
     const FILE_NAME: &str = "sample_data/content.txt";
     let file = File::open(FILE_NAME).unwrap();
     let mmap = unsafe {

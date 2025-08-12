@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::{self, File}};
+use std::{fs::{self, File}, io::Write};
 
 use memmap2::Mmap;
 
@@ -14,7 +14,9 @@ fn main() {
     let file_data = mmap.as_ref();
     let mut binary_index = indices::binary::BinaryIndex::new(file_data);
     let mut content_index = indices::content::ContentIndex::new(file_data);
+    println!("Start building binary index");
     binary_index.build();
+    println!("Start building content index");
     content_index.build();
     println!("Builded binary_index count: {}",  binary_index.index_sink.matches.len());
     println!("Builded content_index count: {}", content_index.index_sink.matches.len());
@@ -24,9 +26,9 @@ fn main() {
     match messages {
         Ok(messages) => {
             let mut n = 0;
-            let file = fs::File::create(format!("out{}.json", n)).unwrap();
             for mes in &messages {
-                serde_json::to_writer_pretty(&file, mes);
+                let mut file: File = fs::File::create(format!("out/out{}.txt", n)).unwrap();
+                file.write_all(mes.as_bytes());
                 n += 1;
             }
         }
@@ -40,8 +42,9 @@ fn on_small_data() {
     let mmap = unsafe {
         Mmap::map(&file).unwrap()
     };
-    let mut binary_index = indices::binary::BinaryIndex::new(&mmap);
-    let mut content_index = indices::content::ContentIndex::new(&mmap);
+    let file_data = mmap.as_ref();
+    let mut binary_index = indices::binary::BinaryIndex::new(file_data);
+    let mut content_index = indices::content::ContentIndex::new(file_data);
     binary_index.build();
     content_index.build();
     println!("Builded binary_index count: {}",  binary_index.index_sink.matches.len());
@@ -52,9 +55,9 @@ fn on_small_data() {
    match messages {
         Ok(messages) => {
             let mut n = 0;
-            let file = fs::File::create(format!("out{}.json", n)).unwrap();
             for mes in &messages {
-                serde_json::to_writer_pretty(&file, mes);
+                let mut file: File = fs::File::create(format!("out/out{}.txt", n)).unwrap();
+                file.write_all(mes.as_bytes());
                 n += 1;
             }
         }
