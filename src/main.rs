@@ -11,11 +11,12 @@ fn main() {
     let mmap = unsafe {
         Mmap::map(&file).unwrap()
     };
-    let mut index = indices::global::GlobalIndex::new(&mmap);
-    index.build();
-    let binary_matches_count = index.index_sink.binary_matches.len();
+    let mut binary_index = indices::binary::BinaryIndex::new(&mmap);
+    let mut content_index = indices::content::ContentIndex::new(&mmap);
+    binary_index.build();
+    content_index.build();
+    let binary_matches_count = binary_index.index_sink.matches.len();
     println!("Builded total found binary data count: {}", binary_matches_count);
-    let res = index.index_binary().unwrap();
-    index.show_first_n(10);
-    index.dump_messages();
+    let res = binary_index.index().unwrap();
+
 }
